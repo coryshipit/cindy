@@ -2,7 +2,7 @@
 
 > 状态：需求定义 + 纸面调研结论，**尚未进入实现**。本文不含实现方案、数据模型终稿或 UI 设计。
 > 核对日期：2026-11-08。Cindy 源码基线：`feadb203dee25ff5ca7ca4051642a413a832c234`。
-> 本版补入鉴权模型与可行性结论，结论见 §6。
+> 本版补入鉴权模型与有条件的可行性结论，结论见 §6。
 > 文档所在分支：`feat/volcengine-coding-plan-usage`。
 > 接手者须知：本文的「已确认」与「待验证」分区必须分开读，不要把官方字段**定义**当成已跑通的**输出**。
 
@@ -83,7 +83,20 @@ interface KimiCodingUsageSnapshot {
 
 即**缺窗口不等于无限或零使用**，不得用缺省值填充。这条原则应直接沿用。
 
-### 2.4 Claude 的 CLI 读取范式可直接借鉴
+### 2.4 账户用量管线已有 GLM 的 API Key 先例
+
+除 §2.2 的 `providerWeeklyQuotaSource()` 外，Desktop 还有
+`apps/desktop/src/main/maker-host/provider-account-usage.ts` 的账户用量管线：Kimi、OpenCode Go、
+DeepSeek、智谱 GLM 均在 main 进程向钉死的官方端点发 HTTP 请求。智谱只认领官方 Coding Plan
+接入路径（CN / Global），用 Cindy 已保存的 API Key（裸 key）请求同域的
+`/api/monitor/usage/quota/limit`，无需另做 SSO。认领还要求官方 origin、匹配路径及
+`apiKey` 鉴权；代理连接不复用 key。快照进入设置页的账户用量卡；此事实**不等于**火山已有
+可用的 API Key 用量端点，也不预定火山最终的展示位置。
+
+因此选实现管线时不能只看 §2.2：火山的账号/订阅级额度形态也值得评估账户用量管线。
+但必须先确认火山是否有可用现有 API Key 查询的官方端点、该 key 的身份是否与套餐一致。
+
+### 2.5 Claude 的 CLI 读取范式可直接借鉴
 
 `apps/desktop/src/main/maker-host/claude-native-cli.ts` 与
 `apps/desktop/src/main/usage/claudeSubscriptionUsageRefresh.ts` 已实现：
@@ -149,7 +162,8 @@ arkcli usage plan --all                          # 4 桶全跑，不探订阅
 
 ### 3.4 鉴权前提与调用面
 
-用量查询属于**控制面**，与模型调用的**数据面**使用完全不同的凭证，这是本需求最关键的前提。
+**arkcli 当前采用的用量接口**属于控制面，与模型调用的数据面使用不同凭证。以下结论
+针对官方 CLI 已记录的调用面；不能据此排除尚未核实的其他官方用量端点。
 
 | 平面 | 凭证 | 覆盖范围 |
 | --- | --- | --- |
@@ -158,7 +172,8 @@ arkcli usage plan --all                          # 4 桶全跑，不探订阅
 
 依据 `skills/arkcli-auth/references/auth-modes.md`，其中明确把 `usage` 列为控制面接口。由此：
 
-- **API Key 不能用于查用量**——这是两套凭证，不是同一把 Key 权限不足的问题。
+- **现有 ARK API Key 不能直接调用下列 arkcli 控制面接口**；是否另有可用 API Key
+  鉴权的官方用量接口，仍待核实（§5.2）。
 - `auth login` 的 AK/SK 通道在 0.1.16 已**关闭**，SSO 是唯一登录入口；STS 过期需 refresh，
   refresh 失败要重登。
 - `auth_method="sts"` 是合法登录态，可来自 `source=ve`（借用本机 `volcengine-cli` 登录态）、
@@ -180,18 +195,20 @@ arkcli 走公网 OpenTOP 入口。火山另有公开 OpenAPI 契约目录，可�
 
 ## 4. 关键风险（方案阶段必须先回答）
 
-### 4.1 SSO 登录态是独立凭证（最高优先级）
+### 4.1 是否需要额外 SSO，取决于火山可用的用量接口（最高优先级）
 
-用量查询需要一份 **SSO 派生的 STS 登录态**，它与 Cindy 里配置的 ARK API Key 是两套凭证（见 §3.4）。
-因此：
+已确认的 `arkcli` 控制面用量接口需要 **SSO 派生的 STS 登录态**，与 Cindy 保存的 ARK
+API Key 是两套凭证（§3.4）。但 §2.4 的智谱实现表明，其他供应商可以另设同域、可凭
+现有 API Key 查询的用量接口；**尚无证据证明火山存在或不存在同类接口**。因此不能将
+「采用 arkcli 需 SSO」提升为「火山用量显示必须 SSO」。
 
-- 用户即便已经在 Cindy 里配置了可用的火山 API Key，**仍然无法读到用量**；
-- 要读用量，用户必须额外完成一次 SSO 授权（浏览器登录），并接受 STS 需 refresh 维持；
-- 登录的 SSO 身份与 Cindy 连接所用的 Key 可能属于**不同账号或不同订阅**，读到的配额未必是当前
-  任务实际消耗的那份。
+- 若火山存在且确认可用现有 ARK API Key 读取对应 Coding Plan 用量的官方端点，优先评估
+  无额外授权的路径，并核实 key 绑定的账号/订阅身份与返回用量的对应关系。
+- 若只可使用已知控制面接口，则用户还需 SSO 授权（或已有可复用的有效登录态），并处理
+  STS refresh；SSO 身份可能与 Cindy 当前连接的 key 属于不同账号或订阅。
 
-必须在方案阶段明确：如何让用户理解并完成这次额外授权；多个身份并存时如何确认一致性；
-不一致时如何降级或拒绝展示。这条是产品决策点，不是技术难点。
+方案阶段先核实 API Key 通道（§5.2），再决定授权交互与身份一致性校验；身份无法确认时
+如何降级或拒绝展示仍是产品决策点。
 
 ### 4.2 只有百分比，没有绝对量
 
@@ -201,18 +218,18 @@ Coding Plan 后端只给 `percent`。因此：
 - 与 `provider-settings.md` §4 现有规则相反方向的换算是必须的：该规则要求**统一显示剩余百分比**
   （100 − 已用，限制在 0–100），而 arkcli 给的是已用百分比，展示层必须做这个转换。
 
-### 4.3 两条通道及其成本
+### 4.3 候选通道及其成本
 
-`arkcli` 在当前仓库**零引用**，Cindy 未内置。STS 门槛（§4.1）在两条通道上都存在，区别在谁承担
-实现成本：
+`arkcli` 在当前仓库**零引用**，Cindy 未内置。控制面方案需要 STS；API Key 方案能否成立
+尚待证实（§5.2）：
 
 | 通道 | 判定 | 成本与阻塞 |
 | --- | --- | --- |
-| **纯 API Key 直连** | ❌ 不可行 | usage 属控制面，API Key 只覆盖数据面（§3.4） |
-| **arkcli CLI**（npm 全局包） | ⚠️ 可行 | 用户需装 `@volcengine/ark-cli` 并做一次 SSO 登录；STS refresh 由 arkcli 负责。Cindy 侧要处理命令发现、进程隔离、凭证不进 renderer |
-| **Cindy 直连 OpenAPI** | ⚠️ 可行但成本最高 | Cindy 需自实现 V4 签名 + STS 获取与刷新；且 `GetCodingPlanUsage` 的公开 spec 尚未证实 |
+| **现有 API Key 直连官方用量端点** | ❓ 待核实 | 不能用 ARK API Key 直接请求已知控制面接口；须先证实火山有可用端点、鉴权方式及账号/订阅归属，不能照搬 GLM URL |
+| **arkcli CLI**（npm 全局包） | ⚠️ 有条件可行 | 用户需装 `@volcengine/ark-cli` 并有有效 SSO/STS 登录态；STS refresh 由 arkcli 负责。Cindy 侧要处理命令发现、进程隔离、凭证不进 renderer |
+| **Cindy 直连已知控制面 OpenAPI** | ⚠️ 有条件可行、成本较高 | Cindy 需自实现 V4 签名 + STS 获取与刷新；且 `GetCodingPlanUsage` 的公开 spec 尚未证实 |
 
-两条可行通道都需要用户做一次 SSO 授权，**没有能仅凭现有 API Key 完成的路径**。
+只有在排除可用的 API Key 通道后，才能把额外 SSO 作为选用已知控制面通道的前置条件。
 
 ## 5. 证据分级
 
@@ -224,7 +241,7 @@ Coding Plan 后端只给 `percent`。因此：
 4. Coding Plan **通常没有 `tier` 字段**（§3.3）。
 5. 未订阅形态为 `subscribed: false` 且 `periods` 为空（`arkcli-usage-plan.md`「错误处理」）。
 6. 错误按 `items[].error` 分桶隔离，一桶失败不影响其它桶（同上）。
-7. 用量属控制面，需 SSO/STS；API Key 只用于数据面（§3.4）。
+7. `arkcli` 已记录的用量调用面属控制面，需 SSO/STS；ARK API Key 不适用于这些接口（§3.4）；其他官方端点未知。
 8. Coding Plan 个人版 / 团队版的调用面分别为 `/open/GetCodingPlanUsage` / `/open/GetSeatInfoUsage`（§3.4）。
 
 ### 5.2 仍需实机确认
@@ -235,23 +252,45 @@ Coding Plan 后端只给 `percent`。因此：
    `ARKCLI_SKIP_POSTINSTALL=1`）、包体积。
 4. 登录态存放位置与生命周期，以及 Cindy 能否在不接触用户凭证的前提下复用。
 5. 调用频率限制，以及未登录 / 无订阅 / 网络失败的实际返回。
-6. SSO 登录在 Cindy 内的可行交互形态（系统浏览器 / 设备码 `--no-browser`）。
+6. 火山是否提供可凭现有 ARK API Key 请求的**官方 Coding Plan 用量端点**：查询官方接口文档/契约，核验端点、鉴权、响应和账号/订阅归属；不得把 GLM 的存在当作火山已支持，也不以 arkcli 只选控制面接口推断其不存在。如无可核实端点，记录证据及仍未知的范围，不向不明 URL 发送 key。
+7. 若只能走控制面，SSO 登录在 Cindy 内的可行交互形态（系统浏览器 / 设备码 `--no-browser`）。
+
+### 5.3 API Key 通道追加纸面核验
+
+- 官方 [`arkcli` 鉴权说明](https://github.com/volcengine/ark-cli/blob/main/skills/arkcli-auth/references/auth-modes.md)
+  明确把模型调用归于数据面 Bearer API Key，把 `usage` 归于控制面 STS/AK-SK。
+  这是**已知接口**的鉴权边界，不是对全部可能端点的穷举。
+- 第三方 [CodexRouter 的接口核对](https://github.com/HernanJiang/CodexRouter/blob/main/docs/volcengine-ark-coding-plan-quota.md)
+  与 [cc-switch 源码](https://github.com/farion1231/cc-switch/blob/main/src-tauri/src/services/coding_plan.rs)
+  均使用 `GetCodingPlanUsage` 控制面签名；cc-switch 源码注释称用推理 Bearer Key
+  请求该网关得到 `400 InvalidAuthorization`。这是**第三方报告**，本次未用真实 key 复验。
+- [CodexBar 的火山说明](https://github.com/steipete/CodexBar/blob/main/docs/doubao.md)
+  另有「API Key 读取用量」路径：实际是对
+  [`/api/coding/v3/chat/completions` 发一次模型请求](https://github.com/steipete/CodexBar/blob/main/Sources/CodexBarCore/Providers/Doubao/DoubaoUsageFetcher.swift)
+  并读取 `x-ratelimit-*` 请求数响应头；该方案会发起推理，不保证返回限额头，也没有证据
+  证明其对应本需求的 `session` / `weekly` / `monthly` 套餐已用百分比。因此**不能把此
+  探测当作 Coding Plan 额度快照 API**。
+
+**目前没有查到可凭现有 ARK API Key 直接读取 Coding Plan `periods[]` 的官方端点；
+这不是「证明不存在」。**尚未完成官方接口目录的实机核验、真实账号的无密钥外泄验证或
+向火山官方确认，§5.2 第 6 项保持待验证。不要猜测同域 URL 后发送用户 key。
 
 ## 6. 验收结论
 
-**可做，前置条件是引入 SSO 登录态。**
+**基于已知控制面接口，有条件可做；是否必须额外 SSO 尚未确定。**
 
 | 通道 | 判定 |
 | --- | --- |
-| 纯 API Key | 不可行 |
-| arkcli CLI | 可行 |
-| Cindy 直连 OpenAPI | 可行但成本最高，spec 未证实 |
+| 现有 API Key 查询其他官方用量端点 | 未证实，先核实端点及身份归属 |
+| arkcli CLI 调用已知控制面接口 | 有条件可行，需有效 SSO/STS 登录态 |
+| Cindy 直连已知控制面 OpenAPI | 有条件可行、成本较高，公开 spec 未证实，需 SSO/STS |
 
 阻塞点按优先级：
 
-1. **SSO 登录态必须由用户额外授权**，无法复用现有 API Key（§4.1）。这是产品决策点。
-2. `GetCodingPlanUsage` 公开 spec 未证实，决定直连方案能否成立（§5.2）。
-3. 落地形态（内置 CLI / 用户自装）需在方案阶段定，涉及打包、版本与登录交互。
+1. **继续核实 API Key 可调用的官方用量接口**（§5.2、§5.3）；纸面未找到，未证实前不宣称免授权，也不宣称必须 SSO。
+2. 若只剩控制面通道，明确额外授权与 Cindy key 的身份错配处理（§4.1）。
+3. `GetCodingPlanUsage` 公开 spec 未证实，决定控制面直连方案能否成立（§5.2）。
+4. 落地形态（内置 CLI / 用户自装等）需在方案阶段定，涉及打包、版本与登录交互。
 
 本阶段达成情况：
 
@@ -265,11 +304,11 @@ Coding Plan 后端只给 `percent`。因此：
 
 | 事项 | 状态 |
 | --- | --- |
-| 读取通道 | 不可行项已排除，剩两条可行通道待选（§4.3） |
+| 读取通道 | API Key 官方端点待核实；控制面两条候选通道待比较（§4.3） |
 | 数据模型（快照 schema 与窗口 id 命名） | 未定，倾向复用 §2.3 形态 |
 | 展示位置（设置页 / 新任务输入区 / 两处） | 未定 |
 | 端范围（Desktop / Mobile 跟随） | 未定 |
-| SSO 授权形态与身份一致性校验（§4.1） | 未定，最高优先级 |
+| API Key 端点可用性、身份一致性；若走控制面则 SSO 授权形态（§4.1） | 未定，最高优先级 |
 | UI 文案与术语（「火山方舟 Coding Plan」需入 `i18n/GLOSSARY.md`） | 未定 |
 
 ## 8. 相关正本
