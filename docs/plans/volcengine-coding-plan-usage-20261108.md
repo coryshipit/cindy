@@ -190,8 +190,10 @@ arkcli usage plan --all                          # 4 桶全跑，不探订阅
 | Agent Plan 个人版 / 团队版 | `/open/GetAFPUsage` / `/open/GetSeatAFPUsage` |
 
 arkcli 走公网 OpenTOP 入口。火山另有公开 OpenAPI 契约目录，可用 `arkcli docs apis list` /
-`docs apis spec --id` 读取（见 `skills/arkcli-docs`）。**该目录是否收录 `GetCodingPlanUsage`、
-其 spec 与鉴权要求为何，只能由实机命令确认，纸面未知。**
+`docs apis spec --id` 读取（见 `skills/arkcli-docs`）。实机读取官方 CLI 1.0.49 的
+`ve.zh` 已发布目录（§5.4）后确认：该次目录不收录 `GetCodingPlanUsage` /
+`GetSeatInfoUsage`，因此未取得二者 spec；这**不等于**实际控制面
+接口不存在，也不证明火山没有另一个 API Key 用量端点。
 
 ## 4. 关键风险（方案阶段必须先回答）
 
@@ -227,7 +229,7 @@ Coding Plan 后端只给 `percent`。因此：
 | --- | --- | --- |
 | **现有 API Key 直连官方用量端点** | ❓ 待核实 | 不能用 ARK API Key 直接请求已知控制面接口；须先证实火山有可用端点、鉴权方式及账号/订阅归属，不能照搬 GLM URL |
 | **arkcli CLI**（npm 全局包） | ⚠️ 有条件可行 | 用户需装 `@volcengine/ark-cli` 并有有效 SSO/STS 登录态；STS refresh 由 arkcli 负责。Cindy 侧要处理命令发现、进程隔离、凭证不进 renderer |
-| **Cindy 直连已知控制面 OpenAPI** | ⚠️ 有条件可行、成本较高 | Cindy 需自实现 V4 签名 + STS 获取与刷新；且 `GetCodingPlanUsage` 的公开 spec 尚未证实 |
+| **Cindy 直连已知控制面 OpenAPI** | ⚠️ 尚缺公开契约、成本较高 | Cindy 需自实现 V4 签名 + STS 获取与刷新；已发布目录未收录 `GetCodingPlanUsage`（§5.4），不能据同类接口推断其完整契约 |
 
 只有在排除可用的 API Key 通道后，才能把额外 SSO 作为选用已知控制面通道的前置条件。
 
@@ -247,7 +249,7 @@ Coding Plan 后端只给 `percent`。因此：
 ### 5.2 仍需实机确认
 
 1. 当前账号实际返回哪几个 `periods`，三档是否总在。
-2. `GetCodingPlanUsage` 是否收录在公开 OpenAPI 目录，其 spec 与鉴权要求。
+2. `GetCodingPlanUsage` 是否收录在公开 OpenAPI 目录：已核验 CLI 1.0.49 的 `ve.zh` 发布目录，未收录（§5.4）；该接口自身的公开 spec 与鉴权细节仍未取得，需其他官方渠道确认。
 3. `arkcli` 安装后的实际行为：postinstall 钩子、Skills 注入可否关闭（`ARKCLI_SKIP_SKILLS=1` /
    `ARKCLI_SKIP_POSTINSTALL=1`）、包体积。
 4. 登录态存放位置与生命周期，以及 Cindy 能否在不接触用户凭证的前提下复用。
@@ -272,8 +274,34 @@ Coding Plan 后端只给 `percent`。因此：
   探测当作 Coding Plan 额度快照 API**。
 
 **目前没有查到可凭现有 ARK API Key 直接读取 Coding Plan `periods[]` 的官方端点；
-这不是「证明不存在」。**尚未完成官方接口目录的实机核验、真实账号的无密钥外泄验证或
-向火山官方确认，§5.2 第 6 项保持待验证。不要猜测同域 URL 后发送用户 key。
+这不是「证明不存在」。**官方已发布目录的核验见 §5.4；仍未取得目标接口契约、
+未核验 API Key 通道，也未向火山官方确认，§5.2 第 6 项保持待验证。不要猜测同域 URL
+后发送用户 key。
+
+### 5.4 官方目录实机核验（已取得目录，未取得 Coding Plan 用量 spec）
+
+在隔离的临时 `HOME` 中运行 npm 官方发布包 `@volcengine/ark-cli-darwin-x64@1.0.49`
+的二进制（下载包 SHA-512 与 npm `dist.integrity` 一致）。未传入 Cindy 的 API Key，
+也**未调用任何账户用量或模型接口**。`arkcli docs apis list --format json` 初次返回
+`not configured`；无凭证初始化临时 profile 后返回 `not logged in`。经用户同意通过浏览器
+SSO，选择用户指定的 `default` 项目，再经用户允许激活 `coding-plan` 消费模式：CLI 报告
+本地创建 `coding-plan_cn-beijing_personal` 和 `platform_cn-beijing_default` 两个 profile。
+本次只对 CLI **已发布接口目录**执行只读 `docs apis list/spec`，不推断账户权限。
+
+`docs apis list --format json` 返回 `target: ve.zh`、
+`source_commit: 3a823a73fcea186b02850d53087b2ef2b4dd380b`，共 **183** 个 `apis[]` 条目；逐条检查
+`id` / `operation_id` / `path`，**没有** `GetCodingPlanUsage` 或 `GetSeatInfoUsage`，
+`coding-plan` 分组仅列出 `ListArkCodingPlanModel`。对比核验：目录收录
+`agent-plan-GetAFPUsage`，其 `docs apis spec --id agent-plan-GetAFPUsage` 的操作级
+`security` 为 `VolcSignatureV4`；`coding-plan-ListArkCodingPlanModel` 与
+`usage-GetInferenceUsage` 的操作级 `security` 也同为 `VolcSignatureV4`。
+`GetInferenceUsage` 说明是按时间/接入点/模型统计 token 与请求数，**不等于**套餐窗口额度。
+注意各 spec 的公共 `components.securitySchemes` 同时定义 `BearerAuth` 和
+`VolcSignatureV4`，必须读操作级 `security`，不能因公共组件含 Bearer 就推断任一操作支持 API Key。
+
+**结论范围**：该版本、`ve.zh` 目标的已发布目录不提供所需接口 spec；不证明接口
+不存在、不能替代接口本身的鉴权核验，也不能排除未收录的其他官方 API Key 通道。
+CLI 登录时的 SSO 要求只说明目录访问前置，不表示目录里所有接口均需 SSO。
 
 ## 6. 验收结论
 
@@ -283,13 +311,13 @@ Coding Plan 后端只给 `percent`。因此：
 | --- | --- |
 | 现有 API Key 查询其他官方用量端点 | 未证实，先核实端点及身份归属 |
 | arkcli CLI 调用已知控制面接口 | 有条件可行，需有效 SSO/STS 登录态 |
-| Cindy 直连已知控制面 OpenAPI | 有条件可行、成本较高，公开 spec 未证实，需 SSO/STS |
+| Cindy 直连已知控制面 OpenAPI | 成本较高，已发布目录未收录所需接口 spec；已知控制面需 STS/V4 |
 
 阻塞点按优先级：
 
 1. **继续核实 API Key 可调用的官方用量接口**（§5.2、§5.3）；纸面未找到，未证实前不宣称免授权，也不宣称必须 SSO。
 2. 若只剩控制面通道，明确额外授权与 Cindy key 的身份错配处理（§4.1）。
-3. `GetCodingPlanUsage` 公开 spec 未证实，决定控制面直连方案能否成立（§5.2）。
+3. CLI 已发布目录不收录 `GetCodingPlanUsage`（§5.4）；需其他官方渠道确认其接口契约，再评估控制面直连方案。
 4. 落地形态（内置 CLI / 用户自装等）需在方案阶段定，涉及打包、版本与登录交互。
 
 本阶段达成情况：
